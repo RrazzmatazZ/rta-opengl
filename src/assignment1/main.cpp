@@ -5,6 +5,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
+
 #include <imgui/imgui.h>
 #include <imgui/backends/imgui_impl_glfw.h>
 #include <imgui/backends/imgui_impl_opengl3.h>
@@ -17,6 +20,7 @@
 #include "utils/Renderer.h"
 #include "utils/Skybox.h"
 
+
 #pragma region window and camera
 const unsigned int window_width = 1920;
 const unsigned int window_height = 1080;
@@ -27,9 +31,12 @@ Camera camera(glm::vec3(0.0f, 0.0f, 10.0f));
 int rotationMode = 0;
 glm::vec3 eulerAngles = glm::vec3(0.0f, 0.0f, 0.0f);
 glm::quat currentQuat = glm::identity<glm::quat>();
+glm::quat targetQuat = glm::identity<glm::quat>();
 
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
+
+glm::vec3 planePos = glm::vec3(0.0f);
 
 
 #pragma region file path RE
@@ -45,6 +52,19 @@ std::string Path(const std::string& subPath)
 
 
 #pragma region path animation
+
+bool isFlying = false;
+float flightTime = 0.0f;
+float flightSpeed = 0.1f;
+
+struct Frame
+{
+    float t;
+    glm::vec3 pos;
+    glm::quat lookAt;
+};
+
+std::vector<Frame> keyFrames;
 
 glm::vec3 bezierPoint(float t, glm::vec3 start, glm::vec3 p1, glm::vec3 p2, glm::vec3 end)
 {
@@ -79,6 +99,65 @@ Mesh GenerateCubic(glm::vec3 p0, glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, int s
 
     return Mesh(vertices, indices, textures, GL_LINE_STRIP);
 }
+
+void appendKeyFrame(const std::vector<glm::vec3>& keyPoints, int frameCount)
+{
+    for (int i = 0; i <= frameCount; ++i)
+    {
+        float globalT = (float)i / (float)frameCount;
+        float scaledT = globalT * 4.0f;
+        int segIdx = (int)scaledT;
+        float localT = scaledT - segIdx;
+
+        //make the final point locate at 3
+        if (segIdx >= 4)
+        {
+            segIdx = 3;
+            localT = 1.0f;
+        }
+
+        //get related curve segment
+        glm::vec3 p0 = keyPoints[segIdx * 4 + 0];
+        glm::vec3 p1 = keyPoints[segIdx * 4 + 1];
+        glm::vec3 p2 = keyPoints[segIdx * 4 + 2];
+        glm::vec3 p3 = keyPoints[segIdx * 4 + 3];
+
+        glm::vec3 pos = bezierPoint(localT, p0, p1, p2, p3);
+        glm::vec3 tangent = glm::normalize(bezierPointLookAt(localT, p0, p1, p2, p3));
+        glm::quat lookAt = glm::quatLookAt(tangent, glm::vec3(0, 1, 0));
+
+        keyFrames.push_back({globalT, pos, lookAt});
+    }
+}
+
+float SmootherStep(float t) {
+    t = glm::clamp(t, 0.0f, 1.0f);
+    // Ken Perlin algorithm
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+void GetInterpolatedState(float time, glm::vec3& outPos, glm::quat& outLookAt)
+{
+    float idxFloat = time * (keyFrames.size() - 1);
+    int idx = (int)idxFloat;
+    float alpha = idxFloat - idx;
+
+    if (idx >= keyFrames.size() - 1)
+    {
+        outPos = keyFrames.back().pos;
+        outLookAt = keyFrames.back().lookAt;
+        return;
+    }
+
+    auto k1 = keyFrames[idx];
+    auto k2 = keyFrames[idx + 1];
+
+    // LERP Position
+    outPos = glm::mix(k1.pos, k2.pos, alpha);
+    // SLERP Rotation
+    outLookAt = glm::slerp(k1.lookAt, k2.lookAt, alpha);
+}
+
 
 #pragma endregion path animation
 
@@ -133,7 +212,6 @@ int main()
         RE("skybox/miramar_bk.tga"),
 
     };
-
     Skybox skybox = Skybox(skybox_paths,RE("skybox/skybox.vs"), RE("skybox/skybox.fs"));
 
 
@@ -142,43 +220,41 @@ int main()
     float len = 80.0f;
     float width = 20.0f;
     float mid = len / 2.0f;
-    int segments = 800;
+    int segments = 100;
 
-    std::vector<Mesh> meshes;
-
-    meshes.push_back(GenerateCubic(
+    std::vector<glm::vec3> points = {
+        //seg1
         glm::vec3(0.0f, 0.0f, 0.0f),
         glm::vec3(0.0f, 0.0f, width),
         glm::vec3(mid - 3.0f, 0.0f, width),
         glm::vec3(mid, 0.0f, 0.0f),
-        segments
-    ));
-
-    meshes.push_back(GenerateCubic(
+        //seg2
         glm::vec3(mid, 0.0f, 0.0f),
         glm::vec3(mid + 3.0f, 0.0f, -width),
         glm::vec3(len, 0.0f, -width),
         glm::vec3(len, 0.0f, 0.0f),
-        segments
-    ));
-
-    meshes.push_back(GenerateCubic(
+        //seg3
         glm::vec3(len, 0.0f, 0.0f),
         glm::vec3(len, 0.0f, width),
         glm::vec3(mid + 3.0f, 0.0f, width),
         glm::vec3(mid, 0.0f, 0.0f),
-        segments
-    ));
-
-    meshes.push_back(GenerateCubic(
+        //seg4
         glm::vec3(mid, 0.0f, 0.0f),
         glm::vec3(mid - 3.0f, 0.0f, -width),
         glm::vec3(0.0f, 0.0f, -width),
-        glm::vec3(0.0f, 0.0f, 0.0f),
-        segments
-    ));
+        glm::vec3(0.0f, 0.0f, 0.0f)
+    };
 
+    std::vector<Mesh> meshes;
+    for (int i = 0; i < 4; ++i)
+    {
+        meshes.push_back(GenerateCubic(
+            points[i * 4 + 0], points[i * 4 + 1], points[i * 4 + 2], points[i * 4 + 3],
+            segments
+        ));
+    }
     Model* bezierCurveModel = new Model(meshes, lineShader);
+    appendKeyFrame(points, 800);
 
     Renderer::Init();
 
@@ -225,24 +301,27 @@ int main()
 
                 ImGui::Text("Pitch (X):");
                 ImGui::SameLine();
-                if (ImGui::Button("Up##P")) currentQuat = currentQuat * qPitch;
+                if (ImGui::Button("Up##P")) targetQuat = targetQuat * qPitch;
                 ImGui::SameLine();
-                if (ImGui::Button("Down##P")) currentQuat = currentQuat * glm::inverse(qPitch);
+                if (ImGui::Button("Down##P")) targetQuat = targetQuat * glm::inverse(qPitch);
                 ImGui::Text("Yaw   (Y):");
                 ImGui::SameLine();
-                if (ImGui::Button("Left##Y")) currentQuat = currentQuat * qYaw;
+                if (ImGui::Button("Left##Y")) targetQuat = targetQuat * qYaw;
                 ImGui::SameLine();
-                if (ImGui::Button("Right##Y")) currentQuat = currentQuat * glm::inverse(qYaw);
+                if (ImGui::Button("Right##Y")) targetQuat = targetQuat * glm::inverse(qYaw);
                 ImGui::Text("Roll  (Z):");
                 ImGui::SameLine();
-                if (ImGui::Button("CCW##R")) currentQuat = currentQuat * qRoll;
+                if (ImGui::Button("CCW##R")) targetQuat = targetQuat * qRoll;
                 ImGui::SameLine();
-                if (ImGui::Button("CW##R")) currentQuat = currentQuat * glm::inverse(qRoll);
+                if (ImGui::Button("CW##R")) targetQuat = targetQuat * glm::inverse(qRoll);
+
+                currentQuat = glm::slerp(currentQuat, targetQuat, 5.0f * deltaTime);
             }
             if (ImGui::Button("Reset Orientation"))
             {
                 eulerAngles = glm::vec3(0.0f, 0.0f, 0.0f);
-                currentQuat = glm::identity<glm::quat>();
+                targetQuat = glm::identity<glm::quat>();
+                currentQuat = glm::slerp(currentQuat, targetQuat, 5.0f * deltaTime);
             }
             ImGui::NewLine();
 
@@ -253,6 +332,7 @@ int main()
                 camera.Pitch = -89.9f;
                 camera.Yaw = -90.0f;
                 camera.updateCameraVectors();
+                isFlying = true;
             }
             ImGui::SameLine();
             if (ImGui::Button("Stop"))
@@ -261,32 +341,54 @@ int main()
                 camera.Pitch = 0.0f;
                 camera.Yaw = -90.0f;
                 camera.updateCameraVectors();
+                isFlying = false;
+                currentQuat = glm::identity<glm::quat>();
+                targetQuat = glm::identity<glm::quat>();
+                planePos = glm::vec3(0.0f, 0.0f, 0.0f);
             }
             ImGui::End();
         }
 #pragma endregion
 
+
         Renderer::BeginScene(camera, (float)window_width / (float)window_height);
         Renderer::SetSkybox(skybox);
-        Renderer::Submit(*bezierCurveModel, glm::mat4(1.0f));
+        if (isFlying)
         {
-            glm::mat4 eulerMatrix = glm::mat4(1.0f);
+            Renderer::Submit(*bezierCurveModel, glm::mat4(1.0f));
 
-            //yxz order euler
-            eulerMatrix = glm::rotate(eulerMatrix, glm::radians(eulerAngles.y), glm::vec3(0.0f, 1.0f, 0.0f));
-            eulerMatrix = glm::rotate(eulerMatrix, glm::radians(eulerAngles.x), glm::vec3(1.0f, 0.0f, 0.0f));
-            eulerMatrix = glm::rotate(eulerMatrix, glm::radians(eulerAngles.z), glm::vec3(0.0f, 0.0f, 1.0f));
+            flightTime += deltaTime * flightSpeed;
+            float rawT = flightTime;
+            rawT = rawT - floor(rawT);
 
-            glm::mat4 quatMatrix = glm::mat4_cast(glm::normalize(currentQuat));
+            float easedT = SmootherStep(rawT);
 
-            glm::mat4 baseMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.0f));
-            baseMatrix = glm::rotate(baseMatrix, glm::radians(-90.0f), glm::vec3(.0f, 1.0f, 0.0f));
-            baseMatrix = glm::rotate(baseMatrix, glm::radians(-90.0f), glm::vec3(1.0f, .0f, 0.0f));
-            baseMatrix = glm::scale(baseMatrix, glm::vec3(0.5f, 0.5f, 0.5f));
+            glm::quat flyRot;
+            GetInterpolatedState(easedT, planePos, flyRot);
+            currentQuat = flyRot;
+        }
+        {
+            glm::mat4 model = glm::mat4(1.0f);
 
-            baseMatrix = eulerMatrix * quatMatrix * baseMatrix;
+            model = glm::translate(model, planePos);
 
-            Renderer::Submit(aeroplane, baseMatrix);
+            if (isFlying || rotationMode == 1)
+            {
+                glm::mat4 quatMatrix = glm::mat4_cast(glm::normalize(currentQuat));
+                model = model * quatMatrix;
+            }
+            else
+            {
+                model = glm::rotate(model, glm::radians(eulerAngles.y), glm::vec3(0.0f, 1.0f, 0.0f));
+                model = glm::rotate(model, glm::radians(eulerAngles.x), glm::vec3(1.0f, 0.0f, 0.0f));
+                model = glm::rotate(model, glm::radians(eulerAngles.z), glm::vec3(0.0f, 0.0f, 1.0f));
+            }
+
+            model = glm::rotate(model, glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            model = glm::rotate(model, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+            model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
+
+            Renderer::Submit(aeroplane, model);
         }
         Renderer::EndScene();
         ImGui::Render();
