@@ -16,9 +16,10 @@ public:
     std::vector<Texture>      textures;
     unsigned int VAO;
 
-    Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures);
+    GLenum drawMode;
 
-    // 渲染网格
+    Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures, GLenum drawMode = GL_TRIANGLES);
+
     void Draw(Shader &shader);
 
 private:

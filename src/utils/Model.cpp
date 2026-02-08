@@ -1,6 +1,5 @@
 #include "Model.h"
 #include "stb_image.h"
-
 #include <filesystem>
 #include <iostream>
 
@@ -9,6 +8,12 @@ Model::Model(std::string const &path, const char* vsPath, const char* fsPath, bo
 {
     modelShader = new Shader(vsPath, fsPath);
     loadModel(path);
+}
+
+Model::Model(std::vector<Mesh> customMeshes, Shader* shader)
+    : meshes(customMeshes), modelShader(shader), gammaCorrection(false)
+{
+
 }
 
 Model::~Model()
@@ -71,7 +76,6 @@ Mesh Model::processMesh(aiMesh *mesh, const aiScene *scene)
     {
         Vertex vertex;
         glm::vec3 vector;
-
         vector.x = mesh->mVertices[i].x;
         vector.y = mesh->mVertices[i].y;
         vector.z = mesh->mVertices[i].z;
@@ -92,17 +96,9 @@ Mesh Model::processMesh(aiMesh *mesh, const aiScene *scene)
             vec.y = mesh->mTextureCoords[0][i].y;
             vertex.TexCoords = vec;
 
-            if (mesh->HasTangentsAndBitangents())
-            {
-                vector.x = mesh->mTangents[i].x;
-                vector.y = mesh->mTangents[i].y;
-                vector.z = mesh->mTangents[i].z;
-                vertex.Tangent = vector;
-
-                vector.x = mesh->mBitangents[i].x;
-                vector.y = mesh->mBitangents[i].y;
-                vector.z = mesh->mBitangents[i].z;
-                vertex.Bitangent = vector;
+            if (mesh->HasTangentsAndBitangents()) {
+                vertex.Tangent = {mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z};
+                vertex.Bitangent = {mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z};
             }
         }
         else
@@ -120,19 +116,11 @@ Mesh Model::processMesh(aiMesh *mesh, const aiScene *scene)
     }
 
     // 3. Material Textures
-    aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-
-    std::vector<Texture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
-    textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
-
-    std::vector<Texture> specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
-    textures.insert(textures.end(), specularMaps.begin(), specularMaps.end());
-
-    std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
-    textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
-
-    std::vector<Texture> heightMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_height");
-    textures.insert(textures.end(), heightMaps.begin(), heightMaps.end());
+    if(mesh->mMaterialIndex >= 0) {
+        aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+        std::vector<Texture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
+        textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
+    }
 
     return Mesh(vertices, indices, textures);
 }

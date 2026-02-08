@@ -2,18 +2,14 @@
 #define MODEL_H
 
 #include <glad/glad.h>
-
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
-
 #include "Mesh.h"
 #include "Shader.h"
 #include "RenderTypes.h"
-
 #include <string>
 #include <vector>
 
@@ -28,12 +24,15 @@ public:
     Shader* modelShader;
 
     Model(std::string const &path, const char* vsPath, const char* fsPath, bool gamma = false);
+
+    Model(std::vector<Mesh> customMeshes, Shader* shader);
+
     ~Model();
 
     void Draw(glm::mat4 model, glm::mat4 view, glm::mat4 projection);
 
 private:
-    const aiScene* scene_ptr;
+    const aiScene* scene_ptr = nullptr;
 
     void loadModel(std::string const &path);
     void processNode(aiNode *node, const aiScene *scene);

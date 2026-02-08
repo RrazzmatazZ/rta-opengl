@@ -31,6 +31,8 @@ glm::quat currentQuat = glm::identity<glm::quat>();
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
+
+#pragma region file path RE
 const std::filesystem::path RESOURCE_ROOT = "/Users/dodge/programs/avr/rta/rta-opengl/src/assignment1";
 
 std::string Path(const std::string& subPath)
@@ -39,11 +41,46 @@ std::string Path(const std::string& subPath)
 }
 
 #define RE(p) Path(p).c_str()
+#pragma endregion
 
-void framebuffer_size_callback(GLFWwindow* window, int width, int height)
+
+#pragma region path animation
+
+glm::vec3 bezierPoint(float t, glm::vec3 start, glm::vec3 p1, glm::vec3 p2, glm::vec3 end)
 {
-    glViewport(0, 0, width, height);
+    const float el = 1 - t;
+    //B(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3
+    return el * el * el * start + 3 * el * el * t * p1 + 3 * el * t * t * p2 + t * t * t * end;
 }
+
+glm::vec3 bezierPointLookAt(float t, glm::vec3 start, glm::vec3 p1, glm::vec3 p2, glm::vec3 end)
+{
+    const float el = 1 - t;
+    //B'(t) = 3*(1-t)^2*(p1-p0) + 6*(1-t)*t*(p2-p1) + 3*t^2*(p3-p2)
+    return 3 * el * el * (p1 - start) + 6 * el * t * (p2 - p1) + 3 * t * t * (end - p2);
+}
+
+Mesh GenerateCubic(glm::vec3 p0, glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, int segments)
+{
+    std::vector<Vertex> vertices;
+    std::vector<unsigned int> indices;
+    std::vector<Texture> textures;
+
+    for (int i = 0; i <= segments; ++i)
+    {
+        float t = (float)i / (float)segments;
+        glm::vec3 pos = bezierPoint(t, p0, p1, p2, p3);
+
+        Vertex v;
+        v.Position = pos;
+        vertices.push_back(v);
+        indices.push_back(i);
+    }
+
+    return Mesh(vertices, indices, textures, GL_LINE_STRIP);
+}
+
+#pragma endregion path animation
 
 int main()
 {
@@ -64,7 +101,6 @@ int main()
         return -1;
     }
     glfwMakeContextCurrent(window);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -99,6 +135,50 @@ int main()
     };
 
     Skybox skybox = Skybox(skybox_paths,RE("skybox/skybox.vs"), RE("skybox/skybox.fs"));
+
+
+    Shader* lineShader = new Shader("line.vs", "line.fs");
+
+    float len = 80.0f;
+    float width = 20.0f;
+    float mid = len / 2.0f;
+    int segments = 800;
+
+    std::vector<Mesh> meshes;
+
+    meshes.push_back(GenerateCubic(
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, width),
+        glm::vec3(mid - 3.0f, 0.0f, width),
+        glm::vec3(mid, 0.0f, 0.0f),
+        segments
+    ));
+
+    meshes.push_back(GenerateCubic(
+        glm::vec3(mid, 0.0f, 0.0f),
+        glm::vec3(mid + 3.0f, 0.0f, -width),
+        glm::vec3(len, 0.0f, -width),
+        glm::vec3(len, 0.0f, 0.0f),
+        segments
+    ));
+
+    meshes.push_back(GenerateCubic(
+        glm::vec3(len, 0.0f, 0.0f),
+        glm::vec3(len, 0.0f, width),
+        glm::vec3(mid + 3.0f, 0.0f, width),
+        glm::vec3(mid, 0.0f, 0.0f),
+        segments
+    ));
+
+    meshes.push_back(GenerateCubic(
+        glm::vec3(mid, 0.0f, 0.0f),
+        glm::vec3(mid - 3.0f, 0.0f, -width),
+        glm::vec3(0.0f, 0.0f, -width),
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        segments
+    ));
+
+    Model* bezierCurveModel = new Model(meshes, lineShader);
 
     Renderer::Init();
 
@@ -167,12 +247,28 @@ int main()
             ImGui::NewLine();
 
             ImGui::Text("Fly Simulation Panel");
+            if (ImGui::Button("Start"))
+            {
+                camera.Position = glm::vec3(40.0f, 60.0f, 0.0f);
+                camera.Pitch = -89.9f;
+                camera.Yaw = -90.0f;
+                camera.updateCameraVectors();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Stop"))
+            {
+                camera.Position = glm::vec3(0.0f, 0.0f, 10.0f);
+                camera.Pitch = 0.0f;
+                camera.Yaw = -90.0f;
+                camera.updateCameraVectors();
+            }
             ImGui::End();
         }
 #pragma endregion
 
         Renderer::BeginScene(camera, (float)window_width / (float)window_height);
         Renderer::SetSkybox(skybox);
+        Renderer::Submit(*bezierCurveModel, glm::mat4(1.0f));
         {
             glm::mat4 eulerMatrix = glm::mat4(1.0f);
 
@@ -190,9 +286,7 @@ int main()
 
             baseMatrix = eulerMatrix * quatMatrix * baseMatrix;
 
-            Renderer::Submit(aeroplane, baseMatrix, [&](Shader* s)
-            {
-            });
+            Renderer::Submit(aeroplane, baseMatrix);
         }
         Renderer::EndScene();
         ImGui::Render();
